@@ -575,6 +575,35 @@
         </div>
         <button class="vs-hud-close" id="vs-hud-close" title="숨기기">×</button>
       </div>
+      <div class="vs-hud-test">
+        <button class="vs-hud-test-btn" id="vs-hud-prev">▲ 이전 (테스트)</button>
+        <button class="vs-hud-test-btn" id="vs-hud-next">▼ 다음 (테스트)</button>
+      </div>
+      <style>
+        .vs-hud-test {
+          display: flex;
+          gap: 4px;
+          margin-bottom: 8px;
+        }
+        .vs-hud-test-btn {
+          flex: 1;
+          padding: 6px 8px;
+          background: rgba(74, 222, 128, 0.1);
+          color: #4ade80;
+          border: 1px solid rgba(74, 222, 128, 0.3);
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.1s ease;
+        }
+        .vs-hud-test-btn:hover {
+          background: rgba(74, 222, 128, 0.2);
+        }
+        .vs-hud-test-btn:active {
+          transform: scale(0.97);
+        }
+      </style>
       <div class="vs-hud-meter" id="vs-hud-meter">
         ${Array.from({ length: 16 }).map(() => '<div class="vs-hud-bar"></div>').join('')}
       </div>
@@ -594,6 +623,31 @@
 
     root.querySelector('#vs-hud-close').addEventListener('click', () => {
       root.classList.add('hidden');
+    });
+
+    // Direct test buttons — these fire with real user gesture
+    // Click handlers dispatch the nav event directly to main-world
+    root.querySelector('#vs-hud-next').addEventListener('click', (e) => {
+      e.stopPropagation();
+      console.log('[VoiceSwipe] USER test: next');
+      document.dispatchEvent(
+        new CustomEvent('voice-swipe-nav', {
+          detail: { direction: 1, source: 'test-button' },
+          bubbles: true,
+          composed: true,
+        })
+      );
+    });
+    root.querySelector('#vs-hud-prev').addEventListener('click', (e) => {
+      e.stopPropagation();
+      console.log('[VoiceSwipe] USER test: prev');
+      document.dispatchEvent(
+        new CustomEvent('voice-swipe-nav', {
+          detail: { direction: -1, source: 'test-button' },
+          bubbles: true,
+          composed: true,
+        })
+      );
     });
   }
 
