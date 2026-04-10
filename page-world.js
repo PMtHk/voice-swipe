@@ -254,7 +254,51 @@
   function navigateYouTubeShorts(direction) {
     console.log('[VoiceSwipe/main] YT Shorts navigate:', direction);
 
-    // Approach 0: Find navigation button and simulate full click
+    // Approach 0: Focus the Shorts player + dispatch keyboard events
+    // (YouTube's global keydown listener is the most reliable path)
+    const shortsEl =
+      document.querySelector('ytd-shorts') ||
+      document.querySelector('#shorts-container') ||
+      findActiveVideo();
+
+    if (shortsEl) {
+      try { shortsEl.focus?.(); } catch (e) {}
+    }
+
+    // Also focus the video specifically
+    const video = findActiveVideo();
+    if (video) {
+      try { video.focus?.(); } catch (e) {}
+    }
+
+    const key = direction > 0 ? 'ArrowDown' : 'ArrowUp';
+    const keyCode = direction > 0 ? 40 : 38;
+    const keyEventInit = {
+      key, code: key, keyCode, which: keyCode,
+      bubbles: true, cancelable: true, composed: true, view: window,
+    };
+
+    // Dispatch keyboard events to multiple targets
+    const keyTargets = [
+      window,
+      document,
+      document.body,
+      document.documentElement,
+      document.activeElement,
+      shortsEl,
+      video,
+    ].filter(Boolean);
+
+    for (const target of keyTargets) {
+      try {
+        target.dispatchEvent(new KeyboardEvent('keydown', keyEventInit));
+        target.dispatchEvent(new KeyboardEvent('keypress', keyEventInit));
+        target.dispatchEvent(new KeyboardEvent('keyup', keyEventInit));
+      } catch (e) {}
+    }
+    console.log('[VoiceSwipe/main] keyboard dispatch to', keyTargets.length, 'targets');
+
+    // Approach 0b: Click the nav button
     const navButton = findNavButtonByPosition(direction);
     if (navButton) {
       const clickable = findClickableAncestor(navButton.el);
@@ -262,22 +306,12 @@
         '[VoiceSwipe/main] click target:',
         navButton.via,
         clickable.tagName,
-        clickable.className,
-        { x: navButton.rect.x, y: navButton.rect.y, w: navButton.rect.width, h: navButton.rect.height }
+        clickable.className
       );
-
-      const urlBefore = location.href;
       simulateClick(clickable);
-
-      // Verify after a short delay — if URL didn't change, fall back to URL nav
-      setTimeout(() => {
-        if (location.href === urlBefore) {
-          console.warn('[VoiceSwipe/main] click did not navigate, trying URL fallback');
-          navigateByUrl(direction);
-        }
-      }, 300);
-      return true;
     }
+
+    return true; // Prevent further strategies from scrolling
 
     // Approach 1: Call internal methods on ytd-shorts Polymer component
     const ytdShorts = document.querySelector('ytd-shorts');
