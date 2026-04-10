@@ -206,37 +206,10 @@
       }
     }
 
-    // Strategy 2: Direct scrollTop set on #shorts-container
-    // (bypasses scroll-snap smoothing that ignores scrollBy)
-    const shortsContainer =
-      document.querySelector('#shorts-container') ||
-      document.querySelector('ytd-shorts');
-    if (shortsContainer) {
-      const before = shortsContainer.scrollTop;
-      const delta = direction * shortsContainer.clientHeight;
-      shortsContainer.scrollTop = before + delta;
-      console.log('[VoiceSwipe] direct scrollTop:', before, '->', shortsContainer.scrollTop);
-
-      // Verify it worked — if not, try scrolling document.documentElement
-      if (shortsContainer.scrollTop === before) {
-        document.documentElement.scrollTop += delta;
-        console.log('[VoiceSwipe] container scroll no-op, scrolled documentElement');
-      }
-
-      return true;
-    }
-
-    // Strategy 3: Walk up from active <video> to find scrollable ancestor
-    const activeVideo = findActiveVideo();
-    if (activeVideo) {
-      const container = findScrollContainer(activeVideo);
-      if (container) {
-        const before = container.scrollTop;
-        container.scrollTop = before + direction * container.clientHeight;
-        console.log('[VoiceSwipe] walk-up scrollTop:', before, '->', container.scrollTop);
-        return true;
-      }
-    }
+    // NOTE: scrollTop strategies removed — they were scrolling the outer
+    // page container (revealing comments below the video) instead of
+    // navigating to the next short. Main-world page-world.js handles
+    // actual navigation by clicking real buttons.
 
     // Strategy 4: Dispatch key events to multiple targets
     console.log('[VoiceSwipe] fallback: dispatch keys');

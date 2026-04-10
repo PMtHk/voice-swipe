@@ -45,43 +45,131 @@
     return el.parentElement; // fallback
   }
 
-  // Find the next/prev navigation arrows by their position on screen
+  // Check if an element looks like a navigation arrow (not like/comment/share etc.)
+  function isLikelyNavArrow(el) {
+    const label = (el.getAttribute('aria-label') || '').toLowerCase();
+    const tooltip = (el.getAttribute('data-tooltip-target-id') || '').toLowerCase();
+    const id = (el.id || '').toLowerCase();
+
+    // Reject interaction buttons (comments, like, share, more, etc.)
+    const rejectKeywords = [
+      '채팅', '댓글', '좋아', '싫어', '공유', '구독', '저장', '더보기',
+      'chat', 'comment', 'like', 'dislike', 'share', 'subscribe',
+      'save', 'more', 'remix', 'report', 'mute', 'profile',
+    ];
+    for (const kw of rejectKeywords) {
+      if (label.includes(kw) || tooltip.includes(kw)) return false;
+    }
+
+    return true;
+  }
+
+  // Check if aria-label / id / context suggests this is specifically a nav arrow
+  function isExplicitNavArrow(el, direction) {
+    const label = (el.getAttribute('aria-label') || '').toLowerCase();
+    const id = (el.id || '').toLowerCase();
+
+    const nextKeywords = ['next video', '다음 동영상', '다음 Shorts', '다음 shorts'];
+    const prevKeywords = ['previous video', '이전 동영상', '이전 Shorts', '이전 shorts'];
+    const keywords = direction > 0 ? nextKeywords : prevKeywords;
+
+    for (const kw of keywords) {
+      if (label.includes(kw.toLowerCase())) return true;
+    }
+
+    if (direction > 0 && id.includes('navigation-button-down')) return true;
+    if (direction < 0 && id.includes('navigation-button-up')) return true;
+
+    return false;
+  }
+
+  // Find the next/prev navigation arrows
   function findNavButtonByPosition(direction) {
-    // YouTube Shorts nav arrows are on the right side of the video player
-    // Down arrow = lower half of viewport, Up arrow = upper half
-    const shapes = document.querySelectorAll('yt-touch-feedback-shape, button, yt-icon-button');
+    // Strategy A: Explicit selectors first
+    const explicitSelectors = direction > 0
+      ? [
+          '#navigation-button-down button',
+          '#navigation-button-down',
+          'button[aria-label="다음 동영상"]',
+          'button[aria-label="Next video"]',
+          'ytd-button-renderer[id="navigation-button-down"] button',
+        ]
+      : [
+          '#navigation-button-up button',
+          '#navigation-button-up',
+          'button[aria-label="이전 동영상"]',
+          'button[aria-label="Previous video"]',
+          'ytd-button-renderer[id="navigation-button-up"] button',
+        ];
+
+    for (const sel of explicitSelectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          console.log('[VoiceSwipe/main] explicit selector match:', sel);
+          return { el, rect, elMid: rect.top + rect.height / 2, via: 'explicit' };
+        }
+      }
+    }
+
+    // Strategy B: Search all buttons, aggressively filter out interaction buttons
+    const buttons = document.querySelectorAll('button, yt-icon-button, ytd-button-renderer');
     const viewportMid = window.innerHeight / 2;
     const candidates = [];
 
-    shapes.forEach((el) => {
+    buttons.forEach((el) => {
       const rect = el.getBoundingClientRect();
       if (rect.width < 20 || rect.height < 20) return;
-      if (rect.width > 200 || rect.height > 200) return; // not a button
-      // Must be in the right half of viewport (nav arrows live there)
-      if (rect.left < window.innerWidth * 0.6) return;
-      if (rect.right > window.innerWidth) return;
+      if (rect.width > 200 || rect.height > 200) return;
 
-      const elMid = rect.top + rect.height / 2;
-      candidates.push({ el, rect, elMid });
+      // CRITICAL: must be visible within the viewport
+      if (rect.top < 0 || rect.bottom > window.innerHeight) return;
+      if (rect.left < 0 || rect.right > window.innerWidth) return;
+
+      // Must be in the FAR right of viewport (past the interaction column)
+      if (rect.left < window.innerWidth * 0.6) return;
+
+      // Reject obvious interaction buttons by context
+      if (!isLikelyNavArrow(el)) return;
+
+      // Reject elements inside comment/menu renderers
+      if (
+        el.closest('ytd-comment-view-model, ytd-comments, ytd-menu-renderer, ytd-engagement-panel-section-list-renderer')
+      ) {
+        return;
+      }
+
+      // Explicit nav arrow gets priority
+      const explicit = isExplicitNavArrow(el, direction);
+      candidates.push({
+        el,
+        rect,
+        elMid: rect.top + rect.height / 2,
+        explicit,
+      });
     });
 
     if (candidates.length === 0) return null;
 
-    // For next (direction > 0): button below the viewport middle
-    // For prev (direction < 0): button above the viewport middle
-    candidates.sort((a, b) => {
-      if (direction > 0) {
-        return b.elMid - a.elMid; // furthest down first
-      }
-      return a.elMid - b.elMid; // furthest up first
-    });
+    // Explicit matches win
+    const explicitMatches = candidates.filter((c) => c.explicit);
+    if (explicitMatches.length > 0) {
+      console.log('[VoiceSwipe/main] explicit nav match found');
+      return { ...explicitMatches[0], via: 'aria' };
+    }
 
-    // Filter candidates on the correct side of viewport mid
-    const filtered = candidates.filter((c) =>
+    // Otherwise, pick the one closest to viewport middle but on the correct side
+    const correctSide = candidates.filter((c) =>
       direction > 0 ? c.elMid > viewportMid : c.elMid < viewportMid
     );
+    const pool = correctSide.length > 0 ? correctSide : candidates;
 
-    return filtered[0] || candidates[0];
+    // Sort by distance from viewport middle (closest first)
+    pool.sort((a, b) => Math.abs(a.elMid - viewportMid) - Math.abs(b.elMid - viewportMid));
+
+    console.log('[VoiceSwipe/main] position-based candidates:', pool.length, 'picked first');
+    return { ...pool[0], via: 'position' };
   }
 
   // ---------- YouTube Shorts navigation ----------
