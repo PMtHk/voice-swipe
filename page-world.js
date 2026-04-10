@@ -28,6 +28,84 @@
     return /^https:\/\/www\.instagram\.com\/reels\//.test(location.href);
   }
 
+  // Dispatch a full mouse event sequence (pointer + mouse + click)
+  function simulateClick(el) {
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+
+    const baseInit = {
+      view: window,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: x,
+      clientY: y,
+      screenX: x,
+      screenY: y,
+      button: 0,
+      buttons: 1,
+      detail: 1,
+    };
+
+    try {
+      el.focus?.();
+    } catch (e) {}
+
+    // Full event sequence — some handlers listen for specific events
+    const sequence = [
+      { type: 'pointerdown', Ctor: PointerEvent, extra: { pointerType: 'mouse', isPrimary: true } },
+      { type: 'mousedown', Ctor: MouseEvent, extra: {} },
+      { type: 'pointerup', Ctor: PointerEvent, extra: { pointerType: 'mouse', isPrimary: true, buttons: 0 } },
+      { type: 'mouseup', Ctor: MouseEvent, extra: { buttons: 0 } },
+      { type: 'click', Ctor: MouseEvent, extra: { buttons: 0 } },
+    ];
+
+    for (const { type, Ctor, extra } of sequence) {
+      try {
+        el.dispatchEvent(new Ctor(type, { ...baseInit, ...extra }));
+      } catch (e) {}
+    }
+
+    // Also call native click as final attempt
+    try { el.click(); } catch (e) {}
+  }
+
+  // Navigate by changing URL — most reliable fallback when click is rejected
+  function navigateByUrl(direction) {
+    const currentMatch = location.pathname.match(/\/shorts\/([^/?#]+)/);
+    if (!currentMatch) return false;
+    const currentId = currentMatch[1];
+
+    // Collect shorts IDs from anywhere in the DOM
+    const ids = new Set();
+
+    // Preload / prefetch links in <head>
+    document.querySelectorAll('link[href*="/shorts/"]').forEach((l) => {
+      const href = l.getAttribute('href') || '';
+      const m = href.match(/\/shorts\/([^/?#&]+)/);
+      if (m) ids.add(m[1]);
+    });
+
+    // Anchor tags
+    document.querySelectorAll('a[href*="/shorts/"]').forEach((a) => {
+      const href = a.getAttribute('href') || '';
+      const m = href.match(/\/shorts\/([^/?#&]+)/);
+      if (m) ids.add(m[1]);
+    });
+
+    ids.delete(currentId);
+    if (ids.size === 0) {
+      console.warn('[VoiceSwipe/main] no shorts IDs in DOM');
+      return false;
+    }
+
+    const [nextId] = ids;
+    console.log('[VoiceSwipe/main] URL navigate ->', nextId);
+    location.href = `/shorts/${nextId}`;
+    return true;
+  }
+
   // Walk up DOM tree to find a clickable ancestor
   function findClickableAncestor(el) {
     let current = el;
@@ -176,21 +254,29 @@
   function navigateYouTubeShorts(direction) {
     console.log('[VoiceSwipe/main] YT Shorts navigate:', direction);
 
-    // Approach 0: Find yt-touch-feedback-shape in the nav arrow position
-    // (user-provided hint: the click feedback shape lives inside nav buttons)
+    // Approach 0: Find navigation button and simulate full click
     const navButton = findNavButtonByPosition(direction);
     if (navButton) {
       const clickable = findClickableAncestor(navButton.el);
       console.log(
-        '[VoiceSwipe/main] position-based click:',
+        '[VoiceSwipe/main] click target:',
+        navButton.via,
         clickable.tagName,
         clickable.className,
-        navButton.rect
+        { x: navButton.rect.x, y: navButton.rect.y, w: navButton.rect.width, h: navButton.rect.height }
       );
-      try {
-        clickable.click();
-        return true;
-      } catch (e) {}
+
+      const urlBefore = location.href;
+      simulateClick(clickable);
+
+      // Verify after a short delay — if URL didn't change, fall back to URL nav
+      setTimeout(() => {
+        if (location.href === urlBefore) {
+          console.warn('[VoiceSwipe/main] click did not navigate, trying URL fallback');
+          navigateByUrl(direction);
+        }
+      }, 300);
+      return true;
     }
 
     // Approach 1: Call internal methods on ytd-shorts Polymer component
