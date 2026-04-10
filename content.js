@@ -298,7 +298,15 @@
 
     const direction = command === 'next' ? 1 : -1;
 
-    // Briefly stop recognition to free main thread — onend handler auto-restarts
+    // CRITICAL: Pause our RAF loop so YouTube's rendering pipeline isn't
+    // contending with us. The audio meter's requestAnimationFrame loop
+    // was blocking YouTube's navigation until tab lost focus.
+    if (state.meterRAF) {
+      cancelAnimationFrame(state.meterRAF);
+      state.meterRAF = null;
+    }
+
+    // Stop recognition briefly to free main thread
     try {
       if (state.recognition && state.isListening) {
         state.recognition.stop();
@@ -317,14 +325,12 @@
       );
     } catch (e) {}
 
-    // Also run content-script fallback navigation in case main-world fails
+    // Resume meter loop after navigation has settled
     setTimeout(() => {
-      if (state.platform === 'youtube-shorts') {
-        navigateYouTubeShorts(direction);
-      } else if (state.platform === 'instagram-reels') {
-        navigateInstagramReels(direction);
+      if (state.analyser && !state.meterRAF) {
+        startMeterLoop();
       }
-    }, 100);
+    }, 1500);
 
     chrome.runtime.sendMessage({
       type: 'STATUS_UPDATE',
