@@ -7,7 +7,6 @@ const DEFAULT_CONFIG = {
 };
 
 const PLATFORM_LABELS = {
-  'youtube-shorts': 'YouTube Shorts',
   'instagram-reels': 'Instagram Reels',
   'unsupported': '지원하지 않는 페이지',
 };
@@ -51,7 +50,6 @@ async function getCurrentTab() {
 
 function detectPlatformFromUrl(url) {
   if (!url) return 'unsupported';
-  if (/^https:\/\/www\.youtube\.com\/shorts\//.test(url)) return 'youtube-shorts';
   if (/^https:\/\/www\.instagram\.com\/reels\//.test(url)) return 'instagram-reels';
   return 'unsupported';
 }

@@ -8,7 +8,6 @@ const DEFAULT_CONFIG = {
 };
 
 const SUPPORTED_URL_PATTERNS = [
-  /^https:\/\/www\.youtube\.com\/shorts\//,
   /^https:\/\/www\.instagram\.com\/reels\//,
 ];
 
@@ -16,7 +15,6 @@ const SUPPORTED_URL_PATTERNS = [
 // v1: always falls back to DEFAULT_CONFIG
 // v2: replace with actual fetch to Fastify/Supabase endpoint
 async function fetchRemoteConfig() {
-  // Placeholder for v2 — returns null so caller uses DEFAULT_CONFIG
   return null;
 }
 
@@ -64,7 +62,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 // Detect tab visibility changes via window focus
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    // Browser lost focus — pause all recognition
     const tabs = await chrome.tabs.query({});
     tabs.forEach((tab) => {
       if (isSupportedUrl(tab.url)) {
@@ -72,7 +69,6 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
       }
     });
   } else {
-    // Browser regained focus — resume active tab if supported
     const [activeTab] = await chrome.tabs.query({ active: true, windowId });
     if (activeTab && isSupportedUrl(activeTab.url)) {
       const { micEnabled } = await loadConfig();
@@ -81,140 +77,6 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
       }
     }
   }
-});
-
-// ---------- Chrome Debugger: trusted keyboard dispatch ----------
-// YouTube checks user activation via requestStorageAccessFor which
-// rejects programmatic events. chrome.debugger's Input.dispatchKeyEvent
-// fires TRUSTED events that pass these checks.
-const attachedTabs = new Set();
-
-async function ensureDebuggerAttached(tabId) {
-  if (attachedTabs.has(tabId)) return true;
-  try {
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attachedTabs.add(tabId);
-    return true;
-  } catch (err) {
-    // Might already be attached by DevTools etc.
-    if (String(err.message).includes('already attached')) {
-      attachedTabs.add(tabId);
-      return true;
-    }
-    console.warn('[VoiceSwipe/bg] debugger attach failed:', err.message);
-    return false;
-  }
-}
-
-async function detachDebugger(tabId) {
-  if (!attachedTabs.has(tabId)) return;
-  try {
-    await chrome.debugger.detach({ tabId });
-  } catch (e) {}
-  attachedTabs.delete(tabId);
-}
-
-async function dispatchTrustedKey(tabId, direction) {
-  const ok = await ensureDebuggerAttached(tabId);
-  if (!ok) return false;
-
-  const key = direction > 0 ? 'ArrowDown' : 'ArrowUp';
-  const keyCode = direction > 0 ? 40 : 38;
-
-  // Strategy A: Runtime.evaluate with userGesture:true — simulates a real
-  // user activation. Any click inside this expression gets user gesture.
-  // This passes YouTube's requestStorageAccessFor user-gesture check.
-  const evalExpr = `
-    (function(){
-      var currentUrl = location.href;
-      var isShorts = /^https:\\/\\/www\\.youtube\\.com\\/shorts\\//.test(currentUrl);
-      var isReels = /^https:\\/\\/www\\.instagram\\.com\\/reels\\//.test(currentUrl);
-      var direction = ${direction};
-
-      // Try clicking YouTube Shorts nav button first
-      if (isShorts) {
-        var selectors = direction > 0
-          ? ['#navigation-button-down button',
-             '#navigation-button-down',
-             'button[aria-label="다음 동영상"]',
-             'button[aria-label="Next video"]']
-          : ['#navigation-button-up button',
-             '#navigation-button-up',
-             'button[aria-label="이전 동영상"]',
-             'button[aria-label="Previous video"]'];
-        for (var i = 0; i < selectors.length; i++) {
-          var el = document.querySelector(selectors[i]);
-          if (el) { el.click(); return 'yt-click:' + selectors[i]; }
-        }
-      }
-
-      // Fallback: dispatch keydown on body/document/window
-      var key = direction > 0 ? 'ArrowDown' : 'ArrowUp';
-      var kc = direction > 0 ? 40 : 38;
-      var init = { key: key, code: key, keyCode: kc, which: kc,
-                   bubbles: true, cancelable: true, composed: true };
-      var targets = [document, document.body, window, document.activeElement].filter(Boolean);
-      for (var j = 0; j < targets.length; j++) {
-        try {
-          targets[j].dispatchEvent(new KeyboardEvent('keydown', init));
-          targets[j].dispatchEvent(new KeyboardEvent('keyup', init));
-        } catch (e) {}
-      }
-      return 'key-fallback';
-    })()
-  `;
-
-  try {
-    const result = await chrome.debugger.sendCommand(
-      { tabId },
-      'Runtime.evaluate',
-      {
-        expression: evalExpr,
-        userGesture: true, // CRITICAL: this makes the code run with user activation
-        awaitPromise: false,
-        returnByValue: true,
-      }
-    );
-    console.log('[VoiceSwipe/bg] eval result:', result.result?.value);
-
-    // Also dispatch raw key event for reliability (Instagram Reels path)
-    await chrome.debugger.sendCommand(
-      { tabId },
-      'Input.dispatchKeyEvent',
-      {
-        type: 'rawKeyDown',
-        key,
-        code: key,
-        windowsVirtualKeyCode: keyCode,
-        nativeVirtualKeyCode: keyCode,
-      }
-    );
-    await chrome.debugger.sendCommand(
-      { tabId },
-      'Input.dispatchKeyEvent',
-      {
-        type: 'keyUp',
-        key,
-        code: key,
-        windowsVirtualKeyCode: keyCode,
-        nativeVirtualKeyCode: keyCode,
-      }
-    );
-    return true;
-  } catch (err) {
-    console.warn('[VoiceSwipe/bg] key dispatch failed:', err.message);
-    return false;
-  }
-}
-
-// Clean up debugger on tab close
-chrome.tabs.onRemoved.addListener((tabId) => {
-  attachedTabs.delete(tabId);
-});
-
-// Also clean up when user manually detaches via DevTools
-chrome.debugger.onDetach.addListener((source) => {
-  if (source.tabId) attachedTabs.delete(source.tabId);
 });
 
 // ---------- Message routing ----------
@@ -228,10 +90,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case 'SETTINGS_UPDATE': {
-        // Persist settings
         await chrome.storage.sync.set(message.settings);
 
-        // Broadcast to all supported tabs
         const tabs = await chrome.tabs.query({});
         tabs.forEach((tab) => {
           if (isSupportedUrl(tab.url)) {
@@ -241,45 +101,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
           }
         });
-
-        // If mic was disabled, detach debugger from all tabs
-        if (message.settings && message.settings.micEnabled === false) {
-          for (const tabId of Array.from(attachedTabs)) {
-            await detachDebugger(tabId);
-          }
-        }
-        sendResponse({ ok: true });
-        break;
-      }
-
-      case 'DISPATCH_KEY': {
-        // Content script asks us to send a trusted keyboard event
-        const tabId = sender.tab?.id;
-        if (!tabId) {
-          sendResponse({ ok: false, error: 'no tab id' });
-          break;
-        }
-        const ok = await dispatchTrustedKey(tabId, message.direction);
-        sendResponse({ ok });
-        break;
-      }
-
-      case 'DETACH_DEBUGGER': {
-        const tabId = sender.tab?.id;
-        if (tabId) await detachDebugger(tabId);
         sendResponse({ ok: true });
         break;
       }
 
       case 'PERMISSION_DENIED': {
-        // Content script reports mic permission was denied
         await chrome.storage.sync.set({ micEnabled: false });
         sendResponse({ ok: true });
         break;
       }
 
       case 'STATUS_UPDATE': {
-        // Forward status updates to any open popup
         chrome.runtime.sendMessage(message).catch(() => {});
         sendResponse({ ok: true });
         break;
@@ -289,7 +121,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: 'Unknown message type' });
     }
   })();
-  return true; // async response
+  return true;
 });
 
 // ---------- Initialization ----------
