@@ -114,11 +114,75 @@
     return null;
   }
 
+  function dispatchKeyToTargets(key, keyCode) {
+    const targets = [
+      document.querySelector('ytd-shorts'),
+      document.querySelector('#shorts-container'),
+      document.querySelector('ytd-reel-video-renderer[is-active]'),
+      document.querySelector('ytd-player'),
+      findActiveVideo(),
+      document.body,
+      document,
+    ].filter(Boolean);
+
+    const eventInit = {
+      key,
+      code: key,
+      keyCode,
+      which: keyCode,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+    };
+
+    targets.forEach((t) => {
+      try {
+        t.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+        t.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+        t.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+      } catch (e) {}
+    });
+  }
+
+  function dispatchWheelToTargets(direction) {
+    const targets = [
+      document.querySelector('#shorts-container'),
+      document.querySelector('ytd-shorts'),
+      findActiveVideo(),
+    ].filter(Boolean);
+
+    targets.forEach((t) => {
+      try {
+        t.dispatchEvent(
+          new WheelEvent('wheel', {
+            deltaY: direction * 120,
+            deltaMode: 0,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            view: window,
+          })
+        );
+      } catch (e) {}
+    });
+  }
+
   function navigateYouTubeShorts(direction) {
     console.log('[VoiceSwipe] Navigate Shorts:', direction > 0 ? 'next' : 'prev');
 
-    // Strategy 1: scrollIntoView on next ytd-reel-video-renderer sibling
-    // (most reliable when virtualization has loaded the next video)
+    // Strategy 1: Keyboard events (YouTube's own shortcut path, not affected by scroll-snap revert)
+    console.log('[VoiceSwipe] dispatch key events');
+    dispatchKeyToTargets(
+      direction > 0 ? 'ArrowDown' : 'ArrowUp',
+      direction > 0 ? 40 : 38
+    );
+
+    // Strategy 2: Wheel events
+    console.log('[VoiceSwipe] dispatch wheel events');
+    dispatchWheelToTargets(direction);
+
+    // Strategy 3: scrollIntoView on next ytd-reel-video-renderer sibling
     const renderers = document.querySelectorAll('ytd-reel-video-renderer');
     if (renderers.length > 1) {
       const viewportMid = window.innerHeight / 2;
@@ -261,13 +325,22 @@
 
     const direction = command === 'next' ? 1 : -1;
 
-    if (state.platform === 'youtube-shorts') {
-      navigateYouTubeShorts(direction);
-    } else if (state.platform === 'instagram-reels') {
-      navigateInstagramReels(direction);
-    } else {
-      return;
-    }
+    // Briefly stop recognition to free main thread — onend handler auto-restarts
+    try {
+      if (state.recognition && state.isListening) {
+        state.recognition.stop();
+      }
+    } catch (e) {}
+
+    // Defer navigation to break out of the speech recognition callback stack
+    // This also gives YouTube's scroll-snap loop a chance to release its lock
+    setTimeout(() => {
+      if (state.platform === 'youtube-shorts') {
+        navigateYouTubeShorts(direction);
+      } else if (state.platform === 'instagram-reels') {
+        navigateInstagramReels(direction);
+      }
+    }, 0);
 
     chrome.runtime.sendMessage({
       type: 'STATUS_UPDATE',
