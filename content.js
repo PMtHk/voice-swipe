@@ -117,32 +117,10 @@
   function navigateYouTubeShorts(direction) {
     console.log('[VoiceSwipe] Navigate Shorts:', direction > 0 ? 'next' : 'prev');
 
-    // Strategy 1: Walk up from active <video> to scroll container
-    const activeVideo = findActiveVideo();
-    if (activeVideo) {
-      const container = findScrollContainer(activeVideo);
-      if (container) {
-        const before = container.scrollTop;
-        container.scrollBy({
-          top: direction * container.clientHeight,
-          behavior: 'smooth',
-        });
-        console.log('[VoiceSwipe] scroll container strategy:', {
-          tag: container.tagName,
-          id: container.id,
-          class: container.className,
-          scrollTop: before,
-          clientHeight: container.clientHeight,
-        });
-        return true;
-      }
-    }
-
-    // Strategy 2: Find ytd-reel-video-renderer and scroll sibling into view
-    const renderers = document.querySelectorAll(
-      'ytd-reel-video-renderer, [id^="shorts-player"]'
-    );
-    if (renderers.length > 0) {
+    // Strategy 1: scrollIntoView on next ytd-reel-video-renderer sibling
+    // (most reliable when virtualization has loaded the next video)
+    const renderers = document.querySelectorAll('ytd-reel-video-renderer');
+    if (renderers.length > 1) {
       const viewportMid = window.innerHeight / 2;
       let currentIndex = -1;
       for (let i = 0; i < renderers.length; i++) {
@@ -162,26 +140,60 @@
       }
     }
 
-    // Strategy 3: Click on-screen navigation button
-    const buttonSelectors = direction > 0
-      ? [
-          'button[aria-label="Next video"]',
-          'button[aria-label="다음 동영상"]',
-          '#navigation-button-down button',
-        ]
-      : [
-          'button[aria-label="Previous video"]',
-          'button[aria-label="이전 동영상"]',
-          '#navigation-button-up button',
-        ];
-    if (findAndClickButton(buttonSelectors)) {
-      console.log('[VoiceSwipe] button click');
+    // Strategy 2: Direct scrollTop set on #shorts-container
+    // (bypasses scroll-snap smoothing that ignores scrollBy)
+    const shortsContainer =
+      document.querySelector('#shorts-container') ||
+      document.querySelector('ytd-shorts');
+    if (shortsContainer) {
+      const before = shortsContainer.scrollTop;
+      const delta = direction * shortsContainer.clientHeight;
+      shortsContainer.scrollTop = before + delta;
+      console.log('[VoiceSwipe] direct scrollTop:', before, '->', shortsContainer.scrollTop);
+
+      // Also scroll the outer document as a belt-and-suspenders
+      document.documentElement.scrollTop += delta;
+
       return true;
     }
 
-    // Strategy 4: Last resort
-    console.warn('[VoiceSwipe] all strategies failed');
-    window.scrollBy({ top: direction * window.innerHeight, behavior: 'smooth' });
+    // Strategy 3: Walk up from active <video> to find scrollable ancestor
+    const activeVideo = findActiveVideo();
+    if (activeVideo) {
+      const container = findScrollContainer(activeVideo);
+      if (container) {
+        const before = container.scrollTop;
+        container.scrollTop = before + direction * container.clientHeight;
+        console.log('[VoiceSwipe] walk-up scrollTop:', before, '->', container.scrollTop);
+        return true;
+      }
+    }
+
+    // Strategy 4: Dispatch key events to multiple targets
+    console.log('[VoiceSwipe] fallback: dispatch keys');
+    const key = direction > 0 ? 'ArrowDown' : 'ArrowUp';
+    const keyCode = direction > 0 ? 40 : 38;
+    const targets = [
+      document,
+      document.body,
+      document.querySelector('ytd-shorts'),
+      activeVideo,
+    ].filter(Boolean);
+    targets.forEach((t) => {
+      try {
+        t.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key,
+            code: key,
+            keyCode,
+            which: keyCode,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          })
+        );
+      } catch (e) {}
+    });
     return false;
   }
 
