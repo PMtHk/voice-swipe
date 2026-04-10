@@ -17,12 +17,24 @@
 
   const state = {
     config: { ...DEFAULT_CONFIG },
-    platform: 'unsupported', // 'youtube-shorts' | 'instagram-reels' | 'unsupported'
+    platform: 'unsupported',
     isListening: false,
     isPaused: false,
     recognition: null,
     lastCommandAt: 0,
     restartTimer: null,
+    // Audio meter
+    audioStream: null,
+    audioContext: null,
+    analyser: null,
+    meterRAF: null,
+    audioLevel: 0,
+    // HUD
+    hud: null,
+    lastTranscript: '',
+    lastConfidence: 0,
+    lastMatched: false,
+    errorText: '',
   };
 
   // ---------- Platform detection ----------
@@ -70,14 +82,10 @@
   }
 
   function navigateYouTubeShorts(direction) {
-    // Try keyboard first (YouTube Shorts responds to arrow keys)
     dispatchKey(direction > 0 ? 'ArrowDown' : 'ArrowUp');
-
-    // Fallback: scroll
     setTimeout(() => {
       const scrolled = window.scrollY;
       scrollBy(direction);
-      // If scroll didn't work, try button click
       setTimeout(() => {
         if (Math.abs(window.scrollY - scrolled) < 10) {
           const selectors = direction > 0
@@ -90,10 +98,7 @@
   }
 
   function navigateInstagramReels(direction) {
-    // Try keyboard first
     dispatchKey(direction > 0 ? 'ArrowDown' : 'ArrowUp');
-
-    // Fallback: button click after a short delay
     setTimeout(() => {
       const nextSelectors = [
         'button[aria-label="Next"]',
@@ -112,7 +117,6 @@
 
   function executeCommand(command) {
     const now = Date.now();
-    // Debounce: ignore commands within 600ms of last execution
     if (now - state.lastCommandAt < 600) return;
     state.lastCommandAt = now;
 
@@ -126,7 +130,6 @@
       return;
     }
 
-    // Broadcast status to popup
     chrome.runtime.sendMessage({
       type: 'STATUS_UPDATE',
       command,
@@ -147,43 +150,390 @@
     return null;
   }
 
+  // ---------- Audio Level Meter (Web Audio API) ----------
+  async function setupAudioMeter() {
+    if (state.audioContext) return true;
+
+    try {
+      state.audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = state.audioContext.createMediaStreamSource(state.audioStream);
+      state.analyser = state.audioContext.createAnalyser();
+      state.analyser.fftSize = 512;
+      state.analyser.smoothingTimeConstant = 0.3;
+      source.connect(state.analyser);
+
+      startMeterLoop();
+      return true;
+    } catch (err) {
+      console.warn('[VoiceSwipe] Audio meter setup failed:', err);
+      state.errorText = '마이크 접근 실패: ' + err.message;
+      updateHud();
+      return false;
+    }
+  }
+
+  function startMeterLoop() {
+    if (!state.analyser) return;
+    const data = new Uint8Array(state.analyser.frequencyBinCount);
+
+    const loop = () => {
+      if (!state.analyser) return;
+      state.analyser.getByteFrequencyData(data);
+
+      // Calculate RMS volume (normalized 0-1)
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        sum += data[i] * data[i];
+      }
+      const rms = Math.sqrt(sum / data.length);
+      state.audioLevel = Math.min(1, rms / 128);
+
+      updateMeterBars();
+      state.meterRAF = requestAnimationFrame(loop);
+    };
+    loop();
+  }
+
+  function stopAudioMeter() {
+    if (state.meterRAF) {
+      cancelAnimationFrame(state.meterRAF);
+      state.meterRAF = null;
+    }
+    if (state.audioStream) {
+      state.audioStream.getTracks().forEach((t) => t.stop());
+      state.audioStream = null;
+    }
+    if (state.audioContext) {
+      state.audioContext.close().catch(() => {});
+      state.audioContext = null;
+    }
+    state.analyser = null;
+    state.audioLevel = 0;
+    updateMeterBars();
+  }
+
+  // ---------- HUD (floating debug overlay) ----------
+  function createHud() {
+    if (state.hud) return;
+
+    const root = document.createElement('div');
+    root.id = 'voice-swipe-hud';
+    root.innerHTML = `
+      <style>
+        #voice-swipe-hud {
+          position: fixed;
+          bottom: 16px;
+          right: 16px;
+          z-index: 2147483647;
+          width: 240px;
+          padding: 12px;
+          background: rgba(18, 18, 18, 0.92);
+          color: #f5f5f5;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          font-size: 12px;
+          border-radius: 12px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          backdrop-filter: blur(10px);
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+          user-select: none;
+          pointer-events: auto;
+          transition: opacity 0.2s ease;
+        }
+        #voice-swipe-hud.hidden { display: none; }
+        .vs-hud-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 8px;
+        }
+        .vs-hud-title {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-weight: 600;
+          font-size: 11px;
+          letter-spacing: 0.03em;
+          text-transform: uppercase;
+          color: #9ca3af;
+        }
+        .vs-hud-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #6b7280;
+          transition: background 0.2s ease;
+        }
+        .vs-hud-dot.listening {
+          background: #4ade80;
+          box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+          animation: vs-pulse 2s ease-in-out infinite;
+        }
+        .vs-hud-dot.error { background: #f87171; }
+        @keyframes vs-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+        .vs-hud-close {
+          cursor: pointer;
+          color: #6b7280;
+          font-size: 16px;
+          line-height: 1;
+          padding: 0 4px;
+          background: none;
+          border: none;
+        }
+        .vs-hud-close:hover { color: #f5f5f5; }
+
+        .vs-hud-meter {
+          display: flex;
+          align-items: flex-end;
+          gap: 3px;
+          height: 40px;
+          margin: 8px 0;
+          padding: 6px;
+          background: rgba(0, 0, 0, 0.35);
+          border-radius: 6px;
+        }
+        .vs-hud-bar {
+          flex: 1;
+          background: #374151;
+          border-radius: 2px;
+          transition: background 0.05s linear, height 0.05s linear;
+          min-height: 3px;
+        }
+        .vs-hud-bar.active { background: #4ade80; }
+        .vs-hud-bar.hot { background: #facc15; }
+        .vs-hud-bar.peak { background: #f87171; }
+
+        .vs-hud-transcript {
+          margin-top: 8px;
+          padding: 8px;
+          background: rgba(0, 0, 0, 0.35);
+          border-radius: 6px;
+          font-size: 11px;
+          min-height: 32px;
+          line-height: 1.4;
+        }
+        .vs-hud-transcript-label {
+          display: block;
+          font-size: 9px;
+          color: #6b7280;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          margin-bottom: 3px;
+        }
+        .vs-hud-transcript-text {
+          color: #f5f5f5;
+          font-weight: 500;
+          word-break: break-all;
+        }
+        .vs-hud-transcript-text.empty { color: #6b7280; font-style: italic; font-weight: 400; }
+        .vs-hud-transcript-text.matched { color: #4ade80; }
+        .vs-hud-transcript-text.below { color: #facc15; }
+
+        .vs-hud-footer {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-top: 8px;
+          font-size: 10px;
+          color: #9ca3af;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .vs-hud-error {
+          margin-top: 8px;
+          padding: 6px 8px;
+          background: rgba(248, 113, 113, 0.1);
+          border: 1px solid rgba(248, 113, 113, 0.3);
+          border-radius: 6px;
+          color: #f87171;
+          font-size: 10px;
+          line-height: 1.3;
+        }
+      </style>
+      <div class="vs-hud-header">
+        <div class="vs-hud-title">
+          <span class="vs-hud-dot" id="vs-hud-dot"></span>
+          <span id="vs-hud-status">Voice Swipe</span>
+        </div>
+        <button class="vs-hud-close" id="vs-hud-close" title="숨기기">×</button>
+      </div>
+      <div class="vs-hud-meter" id="vs-hud-meter">
+        ${Array.from({ length: 16 }).map(() => '<div class="vs-hud-bar"></div>').join('')}
+      </div>
+      <div class="vs-hud-transcript">
+        <span class="vs-hud-transcript-label">들린 내용</span>
+        <span class="vs-hud-transcript-text empty" id="vs-hud-transcript">—</span>
+      </div>
+      <div class="vs-hud-footer">
+        <span id="vs-hud-lang">ko-KR</span>
+        <span id="vs-hud-confidence">conf: —</span>
+      </div>
+      <div class="vs-hud-error" id="vs-hud-error" style="display:none"></div>
+    `;
+
+    document.documentElement.appendChild(root);
+    state.hud = root;
+
+    root.querySelector('#vs-hud-close').addEventListener('click', () => {
+      root.classList.add('hidden');
+    });
+  }
+
+  function removeHud() {
+    if (state.hud) {
+      state.hud.remove();
+      state.hud = null;
+    }
+  }
+
+  function updateMeterBars() {
+    if (!state.hud) return;
+    const bars = state.hud.querySelectorAll('.vs-hud-bar');
+    const level = state.audioLevel;
+    const activeCount = Math.round(level * bars.length);
+
+    bars.forEach((bar, i) => {
+      const isActive = i < activeCount;
+      bar.className = 'vs-hud-bar';
+      if (isActive) {
+        if (i >= 13) bar.classList.add('peak');
+        else if (i >= 9) bar.classList.add('hot');
+        else bar.classList.add('active');
+      }
+      const height = isActive ? 6 + (i / bars.length) * 28 : 3;
+      bar.style.height = height + 'px';
+    });
+  }
+
+  function updateHud() {
+    if (!state.hud) return;
+
+    const dot = state.hud.querySelector('#vs-hud-dot');
+    const statusEl = state.hud.querySelector('#vs-hud-status');
+    const transcriptEl = state.hud.querySelector('#vs-hud-transcript');
+    const langEl = state.hud.querySelector('#vs-hud-lang');
+    const confEl = state.hud.querySelector('#vs-hud-confidence');
+    const errorEl = state.hud.querySelector('#vs-hud-error');
+
+    // Status dot
+    dot.className = 'vs-hud-dot';
+    if (state.errorText) {
+      dot.classList.add('error');
+      statusEl.textContent = '오류';
+    } else if (state.isListening && !state.isPaused) {
+      dot.classList.add('listening');
+      statusEl.textContent = '듣는 중';
+    } else if (state.isPaused) {
+      statusEl.textContent = '일시정지';
+    } else {
+      statusEl.textContent = '대기';
+    }
+
+    // Transcript
+    transcriptEl.className = 'vs-hud-transcript-text';
+    if (!state.lastTranscript) {
+      transcriptEl.textContent = '—';
+      transcriptEl.classList.add('empty');
+    } else {
+      transcriptEl.textContent = `"${state.lastTranscript}"`;
+      if (state.lastMatched) {
+        transcriptEl.classList.add('matched');
+      } else if (state.lastConfidence < state.config.confidence) {
+        transcriptEl.classList.add('below');
+      }
+    }
+
+    // Language + confidence
+    langEl.textContent = state.config.language;
+    confEl.textContent = state.lastConfidence
+      ? `conf: ${state.lastConfidence.toFixed(2)}`
+      : `conf: — (≥ ${state.config.confidence.toFixed(2)})`;
+
+    // Error
+    if (state.errorText) {
+      errorEl.style.display = 'block';
+      errorEl.textContent = state.errorText;
+    } else {
+      errorEl.style.display = 'none';
+    }
+  }
+
   // ---------- Speech Recognition ----------
   function createRecognition() {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      console.warn('[VoiceSwipe] Web Speech API not supported');
+      state.errorText = 'Web Speech API를 지원하지 않는 브라우저';
+      updateHud();
       return null;
     }
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = false;
+    recognition.interimResults = true;
     recognition.lang = state.config.language;
     recognition.maxAlternatives = 3;
 
     recognition.onresult = (event) => {
       const lastIndex = event.results.length - 1;
       const result = event.results[lastIndex];
-      if (!result.isFinal) return;
 
-      // Check all alternatives, pick the highest confidence above threshold
+      // Always capture the first alternative for display (even interim)
+      const firstAlt = result[0];
+      if (firstAlt && firstAlt.transcript) {
+        state.lastTranscript = firstAlt.transcript.trim();
+        state.lastConfidence = firstAlt.confidence || 0;
+      }
+
+      if (!result.isFinal) {
+        updateHud();
+        return;
+      }
+
+      // On final result: try to match command
+      let matched = false;
       for (let i = 0; i < result.length; i++) {
         const alt = result[i];
         if (alt.confidence < state.config.confidence) continue;
-
         const command = matchCommand(alt.transcript);
         if (command) {
+          state.lastTranscript = alt.transcript.trim();
+          state.lastConfidence = alt.confidence;
+          state.lastMatched = true;
+          matched = true;
           executeCommand(command);
-          return;
+          break;
         }
+      }
+
+      if (!matched) {
+        state.lastMatched = false;
+      }
+      updateHud();
+
+      // Reset matched highlight after a moment
+      if (matched) {
+        setTimeout(() => {
+          state.lastMatched = false;
+          updateHud();
+        }, 1500);
       }
     };
 
     recognition.onend = () => {
       state.isListening = false;
-      // Auto-restart if still enabled and not paused
+      updateHud();
       if (state.config.micEnabled && !state.isPaused && state.platform !== 'unsupported') {
         clearTimeout(state.restartTimer);
         state.restartTimer = setTimeout(() => {
@@ -195,23 +545,39 @@
     recognition.onerror = (event) => {
       console.warn('[VoiceSwipe] Recognition error:', event.error);
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        state.errorText = '마이크 권한이 거부되었습니다';
         state.config.micEnabled = false;
         chrome.runtime.sendMessage({ type: 'PERMISSION_DENIED' }).catch(() => {});
+      } else if (event.error === 'no-speech') {
+        // Normal — just restarts
+      } else if (event.error === 'network') {
+        state.errorText = '네트워크 오류 (Web Speech API는 인터넷 연결 필요)';
+      } else if (event.error === 'audio-capture') {
+        state.errorText = '마이크를 찾을 수 없음';
+      } else {
+        state.errorText = '인식 오류: ' + event.error;
       }
+      updateHud();
     };
 
     recognition.onstart = () => {
       state.isListening = true;
+      state.errorText = '';
+      updateHud();
     };
 
     return recognition;
   }
 
-  function startRecognition() {
+  async function startRecognition() {
     if (state.platform === 'unsupported') return;
     if (state.isListening) return;
     if (!state.config.micEnabled) return;
     if (state.isPaused) return;
+
+    // Ensure HUD exists and audio meter running
+    createHud();
+    await setupAudioMeter();
 
     if (!state.recognition) {
       state.recognition = createRecognition();
@@ -222,8 +588,9 @@
       state.recognition.lang = state.config.language;
       state.recognition.start();
     } catch (err) {
-      // Already started or error — will restart on onend
+      // Already started
     }
+    updateHud();
   }
 
   function stopRecognition() {
@@ -236,11 +603,15 @@
     }
     clearTimeout(state.restartTimer);
     state.isListening = false;
+    stopAudioMeter();
+    updateHud();
   }
 
   // ---------- Permission request ----------
   async function requestMicPermission() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      state.errorText = '이 브라우저는 마이크 API를 지원하지 않습니다';
+      updateHud();
       return false;
     }
     try {
@@ -248,6 +619,8 @@
       stream.getTracks().forEach((t) => t.stop());
       return true;
     } catch (err) {
+      state.errorText = '마이크 권한 거부됨: ' + err.message;
+      updateHud();
       chrome.runtime.sendMessage({ type: 'PERMISSION_DENIED' }).catch(() => {});
       return false;
     }
@@ -276,13 +649,16 @@
         state.platform = newPlatform;
         if (state.platform === 'unsupported') {
           stopRecognition();
+          removeHud();
         } else if (state.config.micEnabled) {
           startRecognition();
         }
       }
     }
   });
-  urlObserver.observe(document.body, { childList: true, subtree: true });
+  if (document.body) {
+    urlObserver.observe(document.body, { childList: true, subtree: true });
+  }
 
   // ---------- Message handling ----------
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -299,7 +675,9 @@
           });
         } else if (!state.config.micEnabled && prevEnabled) {
           stopRecognition();
+          removeHud();
         }
+        updateHud();
         sendResponse({ ok: true });
         break;
       }
@@ -335,12 +713,11 @@
     state.platform = detectPlatform();
     if (state.platform === 'unsupported') return;
 
-    // Load config from background
     try {
       const config = await chrome.runtime.sendMessage({ type: 'GET_CONFIG' });
       if (config) state.config = { ...state.config, ...config };
     } catch (err) {
-      // Background may not be ready — use defaults
+      // Background may not be ready
     }
 
     if (state.config.micEnabled) {
