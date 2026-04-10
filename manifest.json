@@ -19,6 +19,15 @@
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/shorts/*",
+        "https://www.instagram.com/*"
+      ],
+      "js": ["page-world.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
     }
   ],
   "action": {

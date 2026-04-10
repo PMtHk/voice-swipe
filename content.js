@@ -332,15 +332,26 @@
       }
     } catch (e) {}
 
-    // Defer navigation to break out of the speech recognition callback stack
-    // This also gives YouTube's scroll-snap loop a chance to release its lock
+    // Dispatch custom event to main-world script which has direct access
+    // to YouTube's Polymer components and can click real buttons
+    try {
+      document.dispatchEvent(
+        new CustomEvent('voice-swipe-nav', {
+          detail: { direction },
+          bubbles: true,
+          composed: true,
+        })
+      );
+    } catch (e) {}
+
+    // Also run content-script fallback navigation in case main-world fails
     setTimeout(() => {
       if (state.platform === 'youtube-shorts') {
         navigateYouTubeShorts(direction);
       } else if (state.platform === 'instagram-reels') {
         navigateInstagramReels(direction);
       }
-    }, 0);
+    }, 100);
 
     chrome.runtime.sendMessage({
       type: 'STATUS_UPDATE',
