@@ -120,23 +120,85 @@ async function dispatchTrustedKey(tabId, direction) {
 
   const key = direction > 0 ? 'ArrowDown' : 'ArrowUp';
   const keyCode = direction > 0 ? 40 : 38;
-  const keyBase = {
-    key,
-    code: key,
-    windowsVirtualKeyCode: keyCode,
-    nativeVirtualKeyCode: keyCode,
-  };
+
+  // Strategy A: Runtime.evaluate with userGesture:true — simulates a real
+  // user activation. Any click inside this expression gets user gesture.
+  // This passes YouTube's requestStorageAccessFor user-gesture check.
+  const evalExpr = `
+    (function(){
+      var currentUrl = location.href;
+      var isShorts = /^https:\\/\\/www\\.youtube\\.com\\/shorts\\//.test(currentUrl);
+      var isReels = /^https:\\/\\/www\\.instagram\\.com\\/reels\\//.test(currentUrl);
+      var direction = ${direction};
+
+      // Try clicking YouTube Shorts nav button first
+      if (isShorts) {
+        var selectors = direction > 0
+          ? ['#navigation-button-down button',
+             '#navigation-button-down',
+             'button[aria-label="다음 동영상"]',
+             'button[aria-label="Next video"]']
+          : ['#navigation-button-up button',
+             '#navigation-button-up',
+             'button[aria-label="이전 동영상"]',
+             'button[aria-label="Previous video"]'];
+        for (var i = 0; i < selectors.length; i++) {
+          var el = document.querySelector(selectors[i]);
+          if (el) { el.click(); return 'yt-click:' + selectors[i]; }
+        }
+      }
+
+      // Fallback: dispatch keydown on body/document/window
+      var key = direction > 0 ? 'ArrowDown' : 'ArrowUp';
+      var kc = direction > 0 ? 40 : 38;
+      var init = { key: key, code: key, keyCode: kc, which: kc,
+                   bubbles: true, cancelable: true, composed: true };
+      var targets = [document, document.body, window, document.activeElement].filter(Boolean);
+      for (var j = 0; j < targets.length; j++) {
+        try {
+          targets[j].dispatchEvent(new KeyboardEvent('keydown', init));
+          targets[j].dispatchEvent(new KeyboardEvent('keyup', init));
+        } catch (e) {}
+      }
+      return 'key-fallback';
+    })()
+  `;
 
   try {
+    const result = await chrome.debugger.sendCommand(
+      { tabId },
+      'Runtime.evaluate',
+      {
+        expression: evalExpr,
+        userGesture: true, // CRITICAL: this makes the code run with user activation
+        awaitPromise: false,
+        returnByValue: true,
+      }
+    );
+    console.log('[VoiceSwipe/bg] eval result:', result.result?.value);
+
+    // Also dispatch raw key event for reliability (Instagram Reels path)
     await chrome.debugger.sendCommand(
       { tabId },
       'Input.dispatchKeyEvent',
-      { ...keyBase, type: 'rawKeyDown' }
+      {
+        type: 'rawKeyDown',
+        key,
+        code: key,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      }
     );
     await chrome.debugger.sendCommand(
       { tabId },
       'Input.dispatchKeyEvent',
-      { ...keyBase, type: 'keyUp' }
+      {
+        type: 'keyUp',
+        key,
+        code: key,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      }
     );
     return true;
   } catch (err) {
