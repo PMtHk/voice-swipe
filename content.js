@@ -81,82 +81,106 @@
     return false;
   }
 
+  // Find the active <video> element in viewport
+  function findActiveVideo() {
+    const videos = Array.from(document.querySelectorAll('video'));
+    const viewportMid = window.innerHeight / 2;
+    return videos.find((v) => {
+      const rect = v.getBoundingClientRect();
+      return (
+        rect.width > 100 &&
+        rect.height > 100 &&
+        rect.top <= viewportMid &&
+        rect.bottom >= viewportMid
+      );
+    });
+  }
+
+  // Walk up from an element to find its scrollable ancestor
+  function findScrollContainer(el) {
+    let current = el;
+    while (current && current !== document.body) {
+      const style = window.getComputedStyle(current);
+      const overflowY = style.overflowY;
+      const snapType = style.scrollSnapType;
+      const isScrollable =
+        (overflowY === 'auto' || overflowY === 'scroll') &&
+        current.scrollHeight > current.clientHeight;
+      if (isScrollable || (snapType && snapType !== 'none')) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
   function navigateYouTubeShorts(direction) {
     console.log('[VoiceSwipe] Navigate Shorts:', direction > 0 ? 'next' : 'prev');
 
-    // Strategy 1: Find current video and scroll sibling into view (most reliable)
-    const videos = document.querySelectorAll('ytd-reel-video-renderer');
-    if (videos.length > 0) {
-      let currentIndex = -1;
-      const viewportMid = window.innerHeight / 2;
+    // Strategy 1: Walk up from active <video> to scroll container
+    const activeVideo = findActiveVideo();
+    if (activeVideo) {
+      const container = findScrollContainer(activeVideo);
+      if (container) {
+        const before = container.scrollTop;
+        container.scrollBy({
+          top: direction * container.clientHeight,
+          behavior: 'smooth',
+        });
+        console.log('[VoiceSwipe] scroll container strategy:', {
+          tag: container.tagName,
+          id: container.id,
+          class: container.className,
+          scrollTop: before,
+          clientHeight: container.clientHeight,
+        });
+        return true;
+      }
+    }
 
-      for (let i = 0; i < videos.length; i++) {
-        const rect = videos[i].getBoundingClientRect();
-        // Currently visible = top in upper half of viewport
+    // Strategy 2: Find ytd-reel-video-renderer and scroll sibling into view
+    const renderers = document.querySelectorAll(
+      'ytd-reel-video-renderer, [id^="shorts-player"]'
+    );
+    if (renderers.length > 0) {
+      const viewportMid = window.innerHeight / 2;
+      let currentIndex = -1;
+      for (let i = 0; i < renderers.length; i++) {
+        const rect = renderers[i].getBoundingClientRect();
         if (rect.top <= viewportMid && rect.bottom >= viewportMid) {
           currentIndex = i;
           break;
         }
       }
-
-      if (currentIndex === -1) {
-        // Fallback: find closest-to-top
-        let minDist = Infinity;
-        for (let i = 0; i < videos.length; i++) {
-          const dist = Math.abs(videos[i].getBoundingClientRect().top);
-          if (dist < minDist) {
-            minDist = dist;
-            currentIndex = i;
-          }
-        }
-      }
-
       if (currentIndex >= 0) {
         const targetIndex = currentIndex + direction;
-        if (targetIndex >= 0 && targetIndex < videos.length) {
-          console.log('[VoiceSwipe] scrollIntoView strategy:', currentIndex, '->', targetIndex);
-          videos[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (targetIndex >= 0 && targetIndex < renderers.length) {
+          console.log('[VoiceSwipe] renderer scrollIntoView:', currentIndex, '->', targetIndex);
+          renderers[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
           return true;
         }
       }
     }
 
-    // Strategy 2: Click on-screen navigation button
+    // Strategy 3: Click on-screen navigation button
     const buttonSelectors = direction > 0
       ? [
-          '#navigation-button-down button',
-          '#navigation-button-down',
           'button[aria-label="Next video"]',
           'button[aria-label="다음 동영상"]',
+          '#navigation-button-down button',
         ]
       : [
-          '#navigation-button-up button',
-          '#navigation-button-up',
           'button[aria-label="Previous video"]',
           'button[aria-label="이전 동영상"]',
+          '#navigation-button-up button',
         ];
-
     if (findAndClickButton(buttonSelectors)) {
-      console.log('[VoiceSwipe] button click strategy succeeded');
+      console.log('[VoiceSwipe] button click');
       return true;
     }
 
-    // Strategy 3: Scroll the shorts container directly
-    const shortsContainer =
-      document.querySelector('ytd-shorts') ||
-      document.querySelector('#shorts-container');
-    if (shortsContainer) {
-      console.log('[VoiceSwipe] container scroll strategy');
-      shortsContainer.scrollBy({
-        top: direction * window.innerHeight,
-        behavior: 'smooth',
-      });
-      return true;
-    }
-
-    // Strategy 4: Last resort — window scroll + key event
-    console.warn('[VoiceSwipe] all strategies failed, using window scroll');
-    dispatchKey(direction > 0 ? 'ArrowDown' : 'ArrowUp');
+    // Strategy 4: Last resort
+    console.warn('[VoiceSwipe] all strategies failed');
     window.scrollBy({ top: direction * window.innerHeight, behavior: 'smooth' });
     return false;
   }
