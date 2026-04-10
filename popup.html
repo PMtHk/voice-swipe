@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Swipe</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1 class="title">Voice Swipe</h1>
+      <div class="status" id="status">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">비활성</span>
+      </div>
+    </header>
+
+    <section class="page-info">
+      <span class="page-label">현재 페이지</span>
+      <span class="page-value" id="pageInfo">감지 중...</span>
+    </section>
+
+    <section class="mic-toggle-section">
+      <button class="mic-toggle" id="micToggle" data-state="off">
+        <span class="mic-icon">🎤</span>
+        <span class="mic-label" id="micLabel">마이크 켜기</span>
+      </button>
+    </section>
+
+    <section class="last-command">
+      <span class="last-label">마지막 명령</span>
+      <span class="last-value" id="lastCommand">—</span>
+    </section>
+
+    <section class="setting">
+      <div class="setting-header">
+        <label for="confidence" class="setting-label">인식 민감도</label>
+        <span class="setting-value" id="confidenceValue">0.50</span>
+      </div>
+      <input
+        type="range"
+        id="confidence"
+        min="0.1"
+        max="1.0"
+        step="0.05"
+        value="0.5"
+        class="slider"
+      >
+      <div class="slider-hints">
+        <span>관대</span>
+        <span>엄격</span>
+      </div>
+    </section>
+
+    <section class="setting">
+      <label class="setting-label">언어</label>
+      <div class="lang-options">
+        <label class="radio">
+          <input type="radio" name="language" value="ko-KR" checked>
+          <span>한국어</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="language" value="en-US">
+          <span>English</span>
+        </label>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span class="hint">"다음" / "next" · "이전" / "back"</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
