@@ -66,7 +66,7 @@
   function scrollBy(direction) {
     window.scrollBy({
       top: direction * window.innerHeight,
-      behavior: 'smooth',
+      behavior: 'auto',
     });
   }
 
@@ -134,7 +134,9 @@
         const targetIndex = currentIndex + direction;
         if (targetIndex >= 0 && targetIndex < renderers.length) {
           console.log('[VoiceSwipe] renderer scrollIntoView:', currentIndex, '->', targetIndex);
-          renderers[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+          // Use 'auto' (instant) — 'smooth' conflicts with YouTube's scroll-snap
+          // and gets queued until tab loses focus
+          renderers[targetIndex].scrollIntoView({ behavior: 'auto', block: 'start' });
           return true;
         }
       }
@@ -151,8 +153,11 @@
       shortsContainer.scrollTop = before + delta;
       console.log('[VoiceSwipe] direct scrollTop:', before, '->', shortsContainer.scrollTop);
 
-      // Also scroll the outer document as a belt-and-suspenders
-      document.documentElement.scrollTop += delta;
+      // Verify it worked — if not, try scrolling document.documentElement
+      if (shortsContainer.scrollTop === before) {
+        document.documentElement.scrollTop += delta;
+        console.log('[VoiceSwipe] container scroll no-op, scrolled documentElement');
+      }
 
       return true;
     }
@@ -236,7 +241,7 @@
         const targetIndex = currentIndex + direction;
         if (targetIndex >= 0 && targetIndex < videos.length) {
           console.log('[VoiceSwipe] Reels video scrollIntoView');
-          videos[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          videos[targetIndex].scrollIntoView({ behavior: 'auto', block: 'center' });
           return true;
         }
       }
@@ -245,7 +250,7 @@
     // Strategy 3: Keyboard + window scroll fallback
     console.warn('[VoiceSwipe] Reels fallback');
     dispatchKey(direction > 0 ? 'ArrowDown' : 'ArrowUp');
-    window.scrollBy({ top: direction * window.innerHeight, behavior: 'smooth' });
+    window.scrollBy({ top: direction * window.innerHeight, behavior: 'auto' });
     return false;
   }
 
