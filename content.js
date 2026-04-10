@@ -82,37 +82,135 @@
   }
 
   function navigateYouTubeShorts(direction) {
-    dispatchKey(direction > 0 ? 'ArrowDown' : 'ArrowUp');
-    setTimeout(() => {
-      const scrolled = window.scrollY;
-      scrollBy(direction);
-      setTimeout(() => {
-        if (Math.abs(window.scrollY - scrolled) < 10) {
-          const selectors = direction > 0
-            ? ['button[aria-label="Next video"]', '#navigation-button-down button']
-            : ['button[aria-label="Previous video"]', '#navigation-button-up button'];
-          findAndClickButton(selectors);
+    console.log('[VoiceSwipe] Navigate Shorts:', direction > 0 ? 'next' : 'prev');
+
+    // Strategy 1: Find current video and scroll sibling into view (most reliable)
+    const videos = document.querySelectorAll('ytd-reel-video-renderer');
+    if (videos.length > 0) {
+      let currentIndex = -1;
+      const viewportMid = window.innerHeight / 2;
+
+      for (let i = 0; i < videos.length; i++) {
+        const rect = videos[i].getBoundingClientRect();
+        // Currently visible = top in upper half of viewport
+        if (rect.top <= viewportMid && rect.bottom >= viewportMid) {
+          currentIndex = i;
+          break;
         }
-      }, 200);
-    }, 50);
+      }
+
+      if (currentIndex === -1) {
+        // Fallback: find closest-to-top
+        let minDist = Infinity;
+        for (let i = 0; i < videos.length; i++) {
+          const dist = Math.abs(videos[i].getBoundingClientRect().top);
+          if (dist < minDist) {
+            minDist = dist;
+            currentIndex = i;
+          }
+        }
+      }
+
+      if (currentIndex >= 0) {
+        const targetIndex = currentIndex + direction;
+        if (targetIndex >= 0 && targetIndex < videos.length) {
+          console.log('[VoiceSwipe] scrollIntoView strategy:', currentIndex, '->', targetIndex);
+          videos[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return true;
+        }
+      }
+    }
+
+    // Strategy 2: Click on-screen navigation button
+    const buttonSelectors = direction > 0
+      ? [
+          '#navigation-button-down button',
+          '#navigation-button-down',
+          'button[aria-label="Next video"]',
+          'button[aria-label="다음 동영상"]',
+        ]
+      : [
+          '#navigation-button-up button',
+          '#navigation-button-up',
+          'button[aria-label="Previous video"]',
+          'button[aria-label="이전 동영상"]',
+        ];
+
+    if (findAndClickButton(buttonSelectors)) {
+      console.log('[VoiceSwipe] button click strategy succeeded');
+      return true;
+    }
+
+    // Strategy 3: Scroll the shorts container directly
+    const shortsContainer =
+      document.querySelector('ytd-shorts') ||
+      document.querySelector('#shorts-container');
+    if (shortsContainer) {
+      console.log('[VoiceSwipe] container scroll strategy');
+      shortsContainer.scrollBy({
+        top: direction * window.innerHeight,
+        behavior: 'smooth',
+      });
+      return true;
+    }
+
+    // Strategy 4: Last resort — window scroll + key event
+    console.warn('[VoiceSwipe] all strategies failed, using window scroll');
+    dispatchKey(direction > 0 ? 'ArrowDown' : 'ArrowUp');
+    window.scrollBy({ top: direction * window.innerHeight, behavior: 'smooth' });
+    return false;
   }
 
   function navigateInstagramReels(direction) {
+    console.log('[VoiceSwipe] Navigate Reels:', direction > 0 ? 'next' : 'prev');
+
+    // Strategy 1: Click navigation button (Instagram renders on-screen arrows)
+    const nextSelectors = [
+      'button[aria-label="Next"]',
+      'button[aria-label="다음"]',
+      'div[role="button"][aria-label="Next"]',
+      'div[role="button"][aria-label="다음"]',
+    ];
+    const prevSelectors = [
+      'button[aria-label="Back"]',
+      'button[aria-label="Previous"]',
+      'button[aria-label="이전"]',
+      'div[role="button"][aria-label="Back"]',
+      'div[role="button"][aria-label="Previous"]',
+    ];
+    if (findAndClickButton(direction > 0 ? nextSelectors : prevSelectors)) {
+      console.log('[VoiceSwipe] Reels button click succeeded');
+      return true;
+    }
+
+    // Strategy 2: Scroll the reels video into view
+    // Instagram Reels uses <video> elements inside articles
+    const videos = document.querySelectorAll('main video');
+    if (videos.length > 0) {
+      let currentIndex = -1;
+      const viewportMid = window.innerHeight / 2;
+      for (let i = 0; i < videos.length; i++) {
+        const rect = videos[i].getBoundingClientRect();
+        if (rect.top <= viewportMid && rect.bottom >= viewportMid) {
+          currentIndex = i;
+          break;
+        }
+      }
+      if (currentIndex >= 0) {
+        const targetIndex = currentIndex + direction;
+        if (targetIndex >= 0 && targetIndex < videos.length) {
+          console.log('[VoiceSwipe] Reels video scrollIntoView');
+          videos[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return true;
+        }
+      }
+    }
+
+    // Strategy 3: Keyboard + window scroll fallback
+    console.warn('[VoiceSwipe] Reels fallback');
     dispatchKey(direction > 0 ? 'ArrowDown' : 'ArrowUp');
-    setTimeout(() => {
-      const nextSelectors = [
-        'button[aria-label="Next"]',
-        'button[aria-label="다음"]',
-        'svg[aria-label="Next"]',
-      ];
-      const prevSelectors = [
-        'button[aria-label="Back"]',
-        'button[aria-label="Previous"]',
-        'button[aria-label="이전"]',
-        'svg[aria-label="Back"]',
-      ];
-      findAndClickButton(direction > 0 ? nextSelectors : prevSelectors);
-    }, 150);
+    window.scrollBy({ top: direction * window.innerHeight, behavior: 'smooth' });
+    return false;
   }
 
   function executeCommand(command) {
