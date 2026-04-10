@@ -298,39 +298,45 @@
 
     const direction = command === 'next' ? 1 : -1;
 
-    // CRITICAL: Pause our RAF loop so YouTube's rendering pipeline isn't
-    // contending with us. The audio meter's requestAnimationFrame loop
-    // was blocking YouTube's navigation until tab lost focus.
-    if (state.meterRAF) {
-      cancelAnimationFrame(state.meterRAF);
-      state.meterRAF = null;
-    }
+    // NUCLEAR: Fully destroy audio stack before navigation to eliminate
+    // any possible contention with YouTube's rendering/navigation pipeline.
+    state.navigating = true;
+    console.log('[VoiceSwipe] full teardown + navigate');
 
-    // Stop recognition briefly to free main thread
+    // Destroy recognition completely (abort is more immediate than stop)
     try {
-      if (state.recognition && state.isListening) {
-        state.recognition.stop();
+      if (state.recognition) {
+        try { state.recognition.abort(); } catch (e) {}
+        try { state.recognition.stop(); } catch (e) {}
       }
     } catch (e) {}
+    state.recognition = null;
+    state.isListening = false;
+    clearTimeout(state.restartTimer);
 
-    // Dispatch custom event to main-world script which has direct access
-    // to YouTube's Polymer components and can click real buttons
-    try {
-      document.dispatchEvent(
-        new CustomEvent('voice-swipe-nav', {
-          detail: { direction },
-          bubbles: true,
-          composed: true,
-        })
-      );
-    } catch (e) {}
+    // Close audio meter stack (RAF, stream, context)
+    stopAudioMeter();
 
-    // Resume meter loop after navigation has settled
+    // Dispatch nav event after a small delay for teardown to settle
     setTimeout(() => {
-      if (state.analyser && !state.meterRAF) {
-        startMeterLoop();
+      try {
+        document.dispatchEvent(
+          new CustomEvent('voice-swipe-nav', {
+            detail: { direction },
+            bubbles: true,
+            composed: true,
+          })
+        );
+      } catch (e) {}
+    }, 80);
+
+    // Recreate audio stack after navigation should have completed
+    setTimeout(() => {
+      state.navigating = false;
+      if (state.config.micEnabled && !state.isPaused && state.platform !== 'unsupported') {
+        startRecognition();
       }
-    }, 1500);
+    }, 2500);
 
     chrome.runtime.sendMessage({
       type: 'STATUS_UPDATE',
@@ -736,6 +742,8 @@
     recognition.onend = () => {
       state.isListening = false;
       updateHud();
+      // Don't auto-restart during navigation — executeCommand handles it
+      if (state.navigating) return;
       if (state.config.micEnabled && !state.isPaused && state.platform !== 'unsupported') {
         clearTimeout(state.restartTimer);
         state.restartTimer = setTimeout(() => {
