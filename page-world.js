@@ -71,36 +71,81 @@
     try { el.click(); } catch (e) {}
   }
 
-  // Navigate by changing URL — most reliable fallback when click is rejected
-  function navigateByUrl(direction) {
-    const currentMatch = location.pathname.match(/\/shorts\/([^/?#]+)/);
-    if (!currentMatch) return false;
-    const currentId = currentMatch[1];
-
-    // Collect shorts IDs from anywhere in the DOM
+  // Find any shorts video IDs available in the DOM
+  function findOtherShortsIds() {
+    const currentId = location.pathname.match(/\/shorts\/([^/?#]+)/)?.[1];
     const ids = new Set();
 
-    // Preload / prefetch links in <head>
     document.querySelectorAll('link[href*="/shorts/"]').forEach((l) => {
-      const href = l.getAttribute('href') || '';
-      const m = href.match(/\/shorts\/([^/?#&]+)/);
+      const m = (l.getAttribute('href') || '').match(/\/shorts\/([^/?#&]+)/);
       if (m) ids.add(m[1]);
     });
-
-    // Anchor tags
     document.querySelectorAll('a[href*="/shorts/"]').forEach((a) => {
-      const href = a.getAttribute('href') || '';
-      const m = href.match(/\/shorts\/([^/?#&]+)/);
+      const m = (a.getAttribute('href') || '').match(/\/shorts\/([^/?#&]+)/);
       if (m) ids.add(m[1]);
     });
 
-    ids.delete(currentId);
-    if (ids.size === 0) {
-      console.warn('[VoiceSwipe/main] no shorts IDs in DOM');
+    if (currentId) ids.delete(currentId);
+    return Array.from(ids);
+  }
+
+  // Navigate via SPA (history.pushState + yt-navigate custom event)
+  // This bypasses YouTube's click handler user-gesture check entirely.
+  function navigateViaSpa(direction) {
+    const otherIds = findOtherShortsIds();
+    if (otherIds.length === 0) {
+      console.warn('[VoiceSwipe/main] SPA nav: no other shorts IDs found');
       return false;
     }
 
-    const [nextId] = ids;
+    const nextId = otherIds[0];
+    const newPath = `/shorts/${nextId}`;
+    console.log('[VoiceSwipe/main] SPA nav ->', nextId);
+
+    try {
+      // Push new URL without reload
+      history.pushState({}, '', newPath);
+
+      // Dispatch YouTube's internal navigation event
+      document.dispatchEvent(
+        new CustomEvent('yt-navigate', {
+          detail: {
+            endpoint: {
+              reelWatchEndpoint: {
+                videoId: nextId,
+                sequenceProvider: 'RELATED_VIDEOS',
+              },
+            },
+          },
+          bubbles: true,
+          composed: true,
+        })
+      );
+
+      // Also dispatch yt-navigate-cache (used by YT SPA router)
+      document.dispatchEvent(
+        new CustomEvent('yt-navigate-cache', {
+          detail: { endpoint: { reelWatchEndpoint: { videoId: nextId } } },
+          bubbles: true,
+          composed: true,
+        })
+      );
+
+      // And popstate for good measure (triggers router listeners)
+      window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+
+      return true;
+    } catch (e) {
+      console.warn('[VoiceSwipe/main] SPA nav failed:', e);
+      return false;
+    }
+  }
+
+  // Navigate by changing URL — last resort, causes full page reload
+  function navigateByUrl(direction) {
+    const otherIds = findOtherShortsIds();
+    if (otherIds.length === 0) return false;
+    const nextId = otherIds[0];
     console.log('[VoiceSwipe/main] URL navigate ->', nextId);
     location.href = `/shorts/${nextId}`;
     return true;
@@ -253,6 +298,11 @@
   // ---------- YouTube Shorts navigation ----------
   function navigateYouTubeShorts(direction) {
     console.log('[VoiceSwipe/main] YT Shorts navigate:', direction);
+
+    // Approach -1: Try SPA navigation first — doesn't require user gesture
+    if (navigateViaSpa(direction)) {
+      // Don't early-return; also try keyboard as belt-and-suspenders
+    }
 
     // Approach 0: Focus the Shorts player + dispatch keyboard events
     // (YouTube's global keydown listener is the most reliable path)
