@@ -265,7 +265,12 @@ body {
 }
 
 .hint {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-dim);
   font-family: 'SF Mono', Monaco, Consolas, monospace;
+  line-height: 1.6;
+}
+
+.hint > div {
+  white-space: nowrap;
 }
