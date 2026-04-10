@@ -298,45 +298,21 @@
 
     const direction = command === 'next' ? 1 : -1;
 
-    // NUCLEAR: Fully destroy audio stack before navigation to eliminate
-    // any possible contention with YouTube's rendering/navigation pipeline.
-    state.navigating = true;
-    console.log('[VoiceSwipe] full teardown + navigate');
+    console.log('[VoiceSwipe] execute:', command);
 
-    // Destroy recognition completely (abort is more immediate than stop)
-    try {
-      if (state.recognition) {
-        try { state.recognition.abort(); } catch (e) {}
-        try { state.recognition.stop(); } catch (e) {}
+    // Ask background to dispatch a TRUSTED keyboard event via chrome.debugger.
+    // This is the only way to trigger YouTube navigation from a non-user-gesture
+    // context (speech recognition callbacks lack user activation).
+    chrome.runtime.sendMessage(
+      { type: 'DISPATCH_KEY', direction },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.warn('[VoiceSwipe] dispatch failed:', chrome.runtime.lastError.message);
+        } else {
+          console.log('[VoiceSwipe] dispatch response:', response);
+        }
       }
-    } catch (e) {}
-    state.recognition = null;
-    state.isListening = false;
-    clearTimeout(state.restartTimer);
-
-    // Close audio meter stack (RAF, stream, context)
-    stopAudioMeter();
-
-    // Dispatch nav event after a small delay for teardown to settle
-    setTimeout(() => {
-      try {
-        document.dispatchEvent(
-          new CustomEvent('voice-swipe-nav', {
-            detail: { direction },
-            bubbles: true,
-            composed: true,
-          })
-        );
-      } catch (e) {}
-    }, 80);
-
-    // Recreate audio stack after navigation should have completed
-    setTimeout(() => {
-      state.navigating = false;
-      if (state.config.micEnabled && !state.isPaused && state.platform !== 'unsupported') {
-        startRecognition();
-      }
-    }, 2500);
+    );
 
     chrome.runtime.sendMessage({
       type: 'STATUS_UPDATE',
@@ -625,29 +601,16 @@
       root.classList.add('hidden');
     });
 
-    // Direct test buttons — these fire with real user gesture
-    // Click handlers dispatch the nav event directly to main-world
+    // Direct test buttons — use same debugger-based dispatch as voice
     root.querySelector('#vs-hud-next').addEventListener('click', (e) => {
       e.stopPropagation();
       console.log('[VoiceSwipe] USER test: next');
-      document.dispatchEvent(
-        new CustomEvent('voice-swipe-nav', {
-          detail: { direction: 1, source: 'test-button' },
-          bubbles: true,
-          composed: true,
-        })
-      );
+      chrome.runtime.sendMessage({ type: 'DISPATCH_KEY', direction: 1 });
     });
     root.querySelector('#vs-hud-prev').addEventListener('click', (e) => {
       e.stopPropagation();
       console.log('[VoiceSwipe] USER test: prev');
-      document.dispatchEvent(
-        new CustomEvent('voice-swipe-nav', {
-          detail: { direction: -1, source: 'test-button' },
-          bubbles: true,
-          composed: true,
-        })
-      );
+      chrome.runtime.sendMessage({ type: 'DISPATCH_KEY', direction: -1 });
     });
   }
 

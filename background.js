@@ -83,6 +83,78 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   }
 });
 
+// ---------- Chrome Debugger: trusted keyboard dispatch ----------
+// YouTube checks user activation via requestStorageAccessFor which
+// rejects programmatic events. chrome.debugger's Input.dispatchKeyEvent
+// fires TRUSTED events that pass these checks.
+const attachedTabs = new Set();
+
+async function ensureDebuggerAttached(tabId) {
+  if (attachedTabs.has(tabId)) return true;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attachedTabs.add(tabId);
+    return true;
+  } catch (err) {
+    // Might already be attached by DevTools etc.
+    if (String(err.message).includes('already attached')) {
+      attachedTabs.add(tabId);
+      return true;
+    }
+    console.warn('[VoiceSwipe/bg] debugger attach failed:', err.message);
+    return false;
+  }
+}
+
+async function detachDebugger(tabId) {
+  if (!attachedTabs.has(tabId)) return;
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch (e) {}
+  attachedTabs.delete(tabId);
+}
+
+async function dispatchTrustedKey(tabId, direction) {
+  const ok = await ensureDebuggerAttached(tabId);
+  if (!ok) return false;
+
+  const key = direction > 0 ? 'ArrowDown' : 'ArrowUp';
+  const keyCode = direction > 0 ? 40 : 38;
+  const keyBase = {
+    key,
+    code: key,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  };
+
+  try {
+    await chrome.debugger.sendCommand(
+      { tabId },
+      'Input.dispatchKeyEvent',
+      { ...keyBase, type: 'rawKeyDown' }
+    );
+    await chrome.debugger.sendCommand(
+      { tabId },
+      'Input.dispatchKeyEvent',
+      { ...keyBase, type: 'keyUp' }
+    );
+    return true;
+  } catch (err) {
+    console.warn('[VoiceSwipe/bg] key dispatch failed:', err.message);
+    return false;
+  }
+}
+
+// Clean up debugger on tab close
+chrome.tabs.onRemoved.addListener((tabId) => {
+  attachedTabs.delete(tabId);
+});
+
+// Also clean up when user manually detaches via DevTools
+chrome.debugger.onDetach.addListener((source) => {
+  if (source.tabId) attachedTabs.delete(source.tabId);
+});
+
 // ---------- Message routing ----------
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
@@ -107,6 +179,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
           }
         });
+
+        // If mic was disabled, detach debugger from all tabs
+        if (message.settings && message.settings.micEnabled === false) {
+          for (const tabId of Array.from(attachedTabs)) {
+            await detachDebugger(tabId);
+          }
+        }
+        sendResponse({ ok: true });
+        break;
+      }
+
+      case 'DISPATCH_KEY': {
+        // Content script asks us to send a trusted keyboard event
+        const tabId = sender.tab?.id;
+        if (!tabId) {
+          sendResponse({ ok: false, error: 'no tab id' });
+          break;
+        }
+        const ok = await dispatchTrustedKey(tabId, message.direction);
+        sendResponse({ ok });
+        break;
+      }
+
+      case 'DETACH_DEBUGGER': {
+        const tabId = sender.tab?.id;
+        if (tabId) await detachDebugger(tabId);
         sendResponse({ ok: true });
         break;
       }
